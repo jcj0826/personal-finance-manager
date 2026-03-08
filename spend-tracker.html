@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spend Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .fade-in { animation: fadeIn 0.2s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+const CATEGORIES = [
+  "Kids", "Bills", "Home", "Pets", "Savings", "Recreation",
+  "Clothes", "Gas", "Restaurants", "College", "Health",
+  "Groceries", "Paycheck", "Other"
+];
+
+const CAT_COLORS = {
+  Kids: "#f59e0b", Bills: "#ef4444", Home: "#3b82f6", Pets: "#8b5cf6",
+  Savings: "#10b981", Recreation: "#f97316", Clothes: "#ec4899",
+  Gas: "#6366f1", Restaurants: "#14b8a6", College: "#a855f7",
+  Health: "#06b6d4", Groceries: "#84cc16", Paycheck: "#22c55e", Other: "#94a3b8"
+};
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+const fmtCur = (n) => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(n);
+const fmtDate = (s) => { const d=new Date(s+"T00:00:00"); return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); };
+const monthKey = (s) => { const d=new Date(s+"T00:00:00"); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); };
+const monthLabel = (k) => { const p=k.split("-"); return MONTHS[parseInt(p[1])-1]+" "+p[0]; };
+
+const parseDate = (s) => {
+  if (!s) return '';
+  s = s.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return mdy[3]+'-'+mdy[1].padStart(2,'0')+'-'+mdy[2].padStart(2,'0');
+  const dmy = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmy) return dmy[3]+'-'+dmy[2].padStart(2,'0')+'-'+dmy[1].padStart(2,'0');
+  const d = new Date(s);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return s;
+};
+
+
+// ─── SVG Icon Component ───
+function Ic({type, size=16, cls=""}) {
+  const p = {width:size,height:size,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round",className:cls};
+  const m = {
+    dollar: <svg {...p}><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>,
+    up: <svg {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
+    down: <svg {...p}><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>,
+    chart: <svg {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+    trash: <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
+    edit: <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+    dl: <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+    upload: <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+    search: <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  };
+  return m[type] || null;
+}
+
+// ─── CSV Import Modal ───
+function parseCSVLine(line) {
+  const result = [];
+  let cur = '', inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuote = !inQuote; }
+    else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+    else { cur += ch; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function ImportModal({ onClose, onImport }) {
+  const [headers, setHeaders] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [colMap, setColMap] = useState({ date: '', amount: '', description: '', category: '' });
+  const [negate, setNegate] = useState(false);
+  const [skipDupes, setSkipDupes] = useState(true);
+  const [step, setStep] = useState('upload');
+  const [error, setError] = useState('');
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError('');
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const lines = evt.target.result.split('\n').filter(l => l.trim());
+      if (lines.length < 2) { setError('File appears empty or has only a header row.'); return; }
+      const hdrs = parseCSVLine(lines[0]);
+      const dataRows = lines.slice(1).map(parseCSVLine);
+      setHeaders(hdrs);
+      setRows(dataRows);
+      const find = (...names) => {
+        const h = hdrs.find(h => names.some(n => h.toLowerCase().includes(n)));
+        return h || '';
+      };
+      setColMap({
+        date: find('date'),
+        amount: find('amount', 'debit', 'credit'),
+        description: find('description', 'memo', 'payee', 'merchant', 'name'),
+        category: find('category', 'type'),
+      });
+      setStep('map');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImport = () => {
+    const di = headers.indexOf(colMap.date);
+    const ai = headers.indexOf(colMap.amount);
+    const dsi = headers.indexOf(colMap.description);
+    const ci = colMap.category ? headers.indexOf(colMap.category) : -1;
+
+    const parsed = rows.map(row => {
+      const rawAmt = parseFloat((row[ai] || '0').replace(/[$, ]/g, ''));
+      const amt = isNaN(rawAmt) ? 0 : (negate ? -rawAmt : rawAmt);
+      const rawCat = ci >= 0 ? (row[ci] || '').trim() : '';
+      const cat = CATEGORIES.includes(rawCat) ? rawCat : 'Other';
+      return { id: genId(), date: parseDate(row[di] || ''), amount: amt, description: (row[dsi] || '').trim(), category: cat };
+    }).filter(t => t.date && t.amount !== 0 && t.description);
+
+    onImport(parsed, skipDupes);
+    onClose();
+  };
+
+  const canImport = colMap.date && colMap.amount && colMap.description;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={e => e.target===e.currentTarget&&onClose()}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
+          <h2 className="text-sm font-semibold text-gray-900">Import CSV</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+
+        {step === 'upload' && (
+          <div className="p-8 flex flex-col items-center gap-4">
+            <label className="cursor-pointer flex flex-col items-center gap-3 p-10 border-2 border-dashed border-gray-200 rounded-xl hover:border-blue-400 transition-colors w-full">
+              <Ic type="upload" size={36} cls="text-gray-300" />
+              <span className="text-sm font-medium text-gray-600">Click to select a CSV file</span>
+              <span className="text-xs text-gray-400 text-center">In Google Sheets: File → Download → Comma Separated Values (.csv)</span>
+              <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" />
+            </label>
+            {error && <p className="text-sm text-red-500">{error}</p>}
+          </div>
+        )}
+
+        {step === 'map' && (
+          <div className="p-4 flex flex-col gap-4 overflow-y-auto">
+            <p className="text-xs text-gray-500">{rows.length} rows detected. Map your columns to the required fields:</p>
+
+            <div className="grid grid-cols-2 gap-3">
+              {[['date','Date *'],['amount','Amount *'],['description','Description *'],['category','Category (optional)']].map(([field, label]) => (
+                <div key={field}>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+                  <select value={colMap[field]} onChange={e => setColMap(m => ({...m, [field]: e.target.value}))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">-- not mapped --</option>
+                    {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" checked={negate} onChange={e => setNegate(e.target.checked)} className="rounded" />
+                Negate amounts (check if expenses are <em>positive</em> numbers in your sheet)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" checked={skipDupes} onChange={e => setSkipDupes(e.target.checked)} className="rounded" />
+                Skip rows that already exist (matched by date + amount + description)
+              </label>
+            </div>
+
+            <div>
+              <p className="text-xs font-medium text-gray-500 mb-2">Preview (first 5 rows)</p>
+              <div className="overflow-x-auto border border-gray-100 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>{headers.map(h => <th key={h} className="px-2 py-1.5 text-left text-gray-500 font-medium whitespace-nowrap">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {rows.slice(0,5).map((row, i) => (
+                      <tr key={i} className="border-t border-gray-50">
+                        {row.map((cell, j) => <td key={j} className="px-2 py-1.5 text-gray-700 max-w-28 truncate">{cell}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={() => setStep('upload')} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Back</button>
+              <button onClick={handleImport} disabled={!canImport}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed">
+                Import {rows.length} rows
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TransactionForm({ onAdd, editingTx, onUpdate, onCancelEdit }) {
+  const [date, setDate] = useState("");
+  const [amount, setAmount] = useState("");
+  const [desc, setDesc] = useState("");
+  const [cat, setCat] = useState("Other");
+  const [isExp, setIsExp] = useState(true);
+
+  useEffect(() => {
+    if (editingTx) {
+      setDate(editingTx.date);
+      setAmount(Math.abs(editingTx.amount).toString());
+      setDesc(editingTx.description);
+      setCat(editingTx.category);
+      setIsExp(editingTx.amount < 0);
+    }
+  }, [editingTx]);
+
+  const reset = () => { setDate(""); setAmount(""); setDesc(""); setCat("Other"); setIsExp(true); };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!date || !amount || !desc) return;
+    const val = isExp ? -Math.abs(parseFloat(amount)) : Math.abs(parseFloat(amount));
+    if (editingTx) { onUpdate({...editingTx, date, amount:val, description:desc, category:cat}); }
+    else { onAdd({id:genId(), date, amount:val, description:desc, category:cat}); }
+    reset();
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="flex gap-2 mb-3">
+        <button type="button" onClick={() => setIsExp(true)}
+          className={"flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-all " + (isExp ? "bg-red-500 text-white shadow-md" : "bg-gray-100 text-gray-600")}>
+          Expense
+        </button>
+        <button type="button" onClick={() => setIsExp(false)}
+          className={"flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-all " + (!isExp ? "bg-green-500 text-white shadow-md" : "bg-gray-100 text-gray-600")}>
+          Income
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
+          <input type="number" step="0.01" min="0" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+        <input type="text" placeholder="e.g. Grocery store, Paycheck..." value={desc} onChange={e => setDesc(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+        <select value={cat} onChange={e => setCat(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div className="flex gap-2">
+        <button type="submit"
+          className={"flex-1 py-2.5 px-4 rounded-lg font-medium text-sm text-white transition-all shadow-md " + (editingTx ? "bg-amber-500 hover:bg-amber-600" : "bg-blue-500 hover:bg-blue-600")}>
+          {editingTx ? "Update Transaction" : "Add Transaction"}
+        </button>
+        {editingTx && (
+          <button type="button" onClick={() => { onCancelEdit(); reset(); }}
+            className="py-2.5 px-4 rounded-lg font-medium text-sm bg-gray-200 text-gray-700 hover:bg-gray-300">
+            Cancel
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function StatCard({ iconType, label, value, color, subtext }) {
+  return (
+    <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 fade-in">
+      <div className="flex items-center gap-2 mb-1">
+        <Ic type={iconType} size={16} cls={color} />
+        <span className="text-xs font-medium text-gray-500">{label}</span>
+      </div>
+      <div className={"text-lg font-bold " + color}>{value}</div>
+      {subtext && <div className="text-xs text-gray-400 mt-1">{subtext}</div>}
+    </div>
+  );
+}
+
+function CatBadge({ category }) {
+  const c = CAT_COLORS[category] || CAT_COLORS.Other;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style={{backgroundColor:c+"20",color:c}}>{category}</span>;
+}
+
+function PieChartSVG({ data }) {
+  const total = data.reduce((s,d) => s+d.total, 0);
+  if (total === 0) return <p className="text-sm text-gray-400 py-16 text-center">No data</p>;
+  let cum = 0;
+  const slices = data.map(d => { const pct = d.total/total; const start = cum; cum += pct; return {...d, start, pct}; });
+  const arc = (start, pct) => {
+    const s = start*2*Math.PI - Math.PI/2;
+    const e = (start+pct)*2*Math.PI - Math.PI/2;
+    const r = 90;
+    return "M "+(150+r*Math.cos(s))+" "+(150+r*Math.sin(s))+" A "+r+" "+r+" 0 "+(pct>0.5?1:0)+" 1 "+(150+r*Math.cos(e))+" "+(150+r*Math.sin(e))+" L 150 150 Z";
+  };
+  return (
+    <div className="flex flex-col items-center">
+      <svg viewBox="0 0 300 300" width="260" height="260">
+        {slices.map((s,i) => <path key={i} d={arc(s.start, Math.max(s.pct, 0.005))} fill={CAT_COLORS[s.category]||"#94a3b8"} stroke="white" strokeWidth="2"><title>{s.category}: {fmtCur(s.total)} ({(s.pct*100).toFixed(1)}%)</title></path>)}
+      </svg>
+      <div className="flex flex-wrap gap-2 mt-3 justify-center">
+        {slices.map(s => <div key={s.category} className="flex items-center gap-1 text-xs"><div className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:CAT_COLORS[s.category]}}/><span className="text-gray-600">{s.category}</span><span className="text-gray-400">({(s.pct*100).toFixed(0)}%)</span></div>)}
+      </div>
+    </div>
+  );
+}
+
+function BarChartSVG({ data }) {
+  if (data.length === 0) return <p className="text-sm text-gray-400 py-16 text-center">No data</p>;
+  const max = Math.max(...data.map(d=>d.total));
+  const w=500, h=250, pad=60, barGap=8;
+  const barW = Math.min(60, (w-pad*2)/data.length - barGap);
+  return (
+    <svg viewBox={"0 0 "+w+" "+(h+30)} className="w-full" style={{maxHeight:300}}>
+      {[0,0.25,0.5,0.75,1].map(p => {
+        const y = pad+(h-pad*2)*(1-p);
+        return <g key={p}><line x1={pad} y1={y} x2={w-pad} y2={y} stroke="#f1f5f9" strokeWidth="1"/><text x={pad-5} y={y+4} textAnchor="end" fontSize="10" fill="#94a3b8">${Math.round(max*p).toLocaleString()}</text></g>;
+      })}
+      {data.map((d,i) => {
+        const barH = max>0?(d.total/max)*(h-pad*2):0;
+        const x = pad+i*(barW+barGap)+barGap;
+        const y = pad+(h-pad*2)-barH;
+        return <g key={i}><rect x={x} y={y} width={barW} height={barH} fill="#3b82f6" rx="4"><title>{d.week}: {fmtCur(d.total)}</title></rect><text x={x+barW/2} y={h-pad+15} textAnchor="middle" fontSize="9" fill="#94a3b8">{d.week}</text></g>;
+      })}
+    </svg>
+  );
+}
+
+function App() {
+  const [txs, setTxs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selMonth, setSelMonth] = useState("all");
+  const [filterCat, setFilterCat] = useState("all");
+  const [sortF, setSortF] = useState("date");
+  const [sortD, setSortD] = useState("desc");
+  const [editing, setEditing] = useState(null);
+  const [view, setView] = useState("list");
+  const [search, setSearch] = useState("");
+  const [showImport, setShowImport] = useState(false);
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    fetch('/api/transactions')
+      .then(r => r.json())
+      .then(data => { setTxs(data); initialized.current = true; setLoading(false); })
+      .catch(() => { initialized.current = true; setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    if (!initialized.current) return;
+    const t = setTimeout(() => {
+      fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(txs) });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [txs]);
+
+  const months = useMemo(() => Array.from(new Set(txs.map(t=>monthKey(t.date)))).sort().reverse(), [txs]);
+
+  const filtered = useMemo(() => {
+    let r = [...txs];
+    if (selMonth !== "all") r = r.filter(t => monthKey(t.date) === selMonth);
+    if (filterCat !== "all") r = r.filter(t => t.category === filterCat);
+    if (search) r = r.filter(t => t.description.toLowerCase().includes(search.toLowerCase()));
+    r.sort((a,b) => {
+      let c = 0;
+      if (sortF==="date") c = a.date.localeCompare(b.date);
+      else if (sortF==="amount") c = a.amount-b.amount;
+      else if (sortF==="description") c = a.description.localeCompare(b.description);
+      else if (sortF==="category") c = a.category.localeCompare(b.category);
+      return sortD==="asc"?c:-c;
+    });
+    return r;
+  }, [txs, selMonth, filterCat, sortF, sortD, search]);
+
+  const withBal = useMemo(() => {
+    const sorted = [...txs].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+    let bal=0; const m={};
+    sorted.forEach(t=>{bal+=t.amount;m[t.id]=bal;});
+    return filtered.map(t=>({...t,balance:m[t.id]}));
+  }, [txs, filtered]);
+
+  const stats = useMemo(() => {
+    const inc=filtered.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
+    const exp=filtered.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
+    return {income:inc,expenses:exp,net:inc-exp,balance:txs.reduce((s,t)=>s+t.amount,0),count:filtered.length};
+  }, [filtered, txs]);
+
+  const catBreak = useMemo(() => {
+    const m={};
+    filtered.filter(t=>t.amount<0).forEach(t=>{
+      if(!m[t.category]) m[t.category]={category:t.category,total:0,count:0};
+      m[t.category].total+=Math.abs(t.amount); m[t.category].count++;
+    });
+    return Object.values(m).sort((a,b)=>b.total-a.total);
+  }, [filtered]);
+
+  const weeklyData = useMemo(() => {
+    const w={};
+    filtered.filter(t=>t.amount<0).forEach(t=>{
+      const d=new Date(t.date+"T00:00:00"); const ws=new Date(d); ws.setDate(d.getDate()-d.getDay());
+      const k=ws.toISOString().slice(0,10);
+      if(!w[k]) w[k]={week:ws.toLocaleDateString("en-US",{month:"short",day:"numeric"}),total:0};
+      w[k].total+=Math.abs(t.amount);
+    });
+    return Object.values(w);
+  }, [filtered]);
+
+  const addTx = useCallback(t=>setTxs(p=>[...p,t]),[]);
+  const updateTx = useCallback(t=>{setTxs(p=>p.map(x=>x.id===t.id?t:x));setEditing(null);},[]);
+  const deleteTx = useCallback(id=>{setTxs(p=>p.filter(t=>t.id!==id));setEditing(e=>e&&e.id===id?null:e);},[]);
+  const toggleSort = f => { if(sortF===f) setSortD(d=>d==="asc"?"desc":"asc"); else {setSortF(f);setSortD("desc");} };
+
+  const importTxs = useCallback((incoming, skipDupes) => {
+    setTxs(prev => {
+      if (!skipDupes) return [...prev, ...incoming];
+      const existing = new Set(prev.map(t => t.date+'|'+t.amount+'|'+t.description));
+      return [...prev, ...incoming.filter(t => !existing.has(t.date+'|'+t.amount+'|'+t.description))];
+    });
+  }, []);
+
+  const exportCSV = () => {
+    const csv=["Date,Amount,Description,Category",...txs.map(t=>t.date+","+t.amount+",\""+t.description+"\","+t.category)].join("\n");
+    const b=new Blob([csv],{type:"text/csv"});
+    const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="transactions.csv";a.click();URL.revokeObjectURL(u);
+  };
+
+  if (loading) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-gray-400 text-sm">Loading...</div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {showImport && <ImportModal onClose={() => setShowImport(false)} onImport={importTxs} />}
+
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-blue-500 rounded-xl flex items-center justify-center"><Ic type="dollar" size={20} cls="text-white" /></div>
+            <div><h1 className="text-lg font-bold text-gray-900">Spend Tracker</h1><p className="text-xs text-gray-500">Personal Finance Manager</p></div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowImport(true)} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">
+              <Ic type="upload" size={14} /> Import CSV
+            </button>
+            <button onClick={exportCSV} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">
+              <Ic type="dl" size={14} /> Export CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 py-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <StatCard iconType="dollar" label="Balance" value={fmtCur(stats.balance)} color="text-blue-600" subtext="Current total" />
+          <StatCard iconType="up" label="Income" value={fmtCur(stats.income)} color="text-green-600" subtext={selMonth==="all"?"All time":monthLabel(selMonth)} />
+          <StatCard iconType="down" label="Expenses" value={fmtCur(stats.expenses)} color="text-red-600" subtext={stats.count+" transactions"} />
+          <StatCard iconType="chart" label="Net" value={fmtCur(stats.net)} color={stats.net>=0?"text-green-600":"text-red-600"} subtext={stats.net>=0?"Surplus":"Deficit"} />
+        </div>
+
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="md:w-80 flex-shrink-0">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 sticky top-20">
+              <h2 className="text-sm font-semibold text-gray-900 mb-3">{editing ? "Edit Transaction" : "New Transaction"}</h2>
+              <TransactionForm onAdd={addTx} editingTx={editing} onUpdate={updateTx} onCancelEdit={()=>setEditing(null)} />
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 mb-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <select value={selMonth} onChange={e=>setSelMonth(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white outline-none">
+                  <option value="all">All Months</option>
+                  {months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
+                </select>
+                <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white outline-none">
+                  <option value="all">All Categories</option>
+                  {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                <div className="flex items-center gap-1 px-3 py-1.5 border border-gray-200 rounded-lg flex-1 min-w-32">
+                  <Ic type="search" size={14} cls="text-gray-400" />
+                  <input type="text" placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} className="text-sm outline-none flex-1 bg-transparent" />
+                </div>
+                <div className="flex bg-gray-100 rounded-lg p-0.5 ml-auto">
+                  {["list","summary","charts"].map(v=><button key={v} onClick={()=>setView(v)} className={"px-3 py-1 rounded-md text-xs font-medium transition-all "+(view===v?"bg-white shadow-sm text-gray-900":"text-gray-500 hover:text-gray-700")}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>)}
+                </div>
+              </div>
+            </div>
+
+            {view==="list" && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-100 bg-gray-50">
+                        {[["date","Date"],["description","Description"],["category","Category"]].map(([f,l])=>
+                          <th key={f} className="text-left text-xs font-medium text-gray-500 px-4 py-2.5 cursor-pointer hover:text-gray-700" onClick={()=>toggleSort(f)}>{l} {sortF===f&&<span className="text-blue-500">{sortD==="asc"?"\u2191":"\u2193"}</span>}</th>
+                        )}
+                        <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5 cursor-pointer hover:text-gray-700" onClick={()=>toggleSort("amount")}>Amount {sortF==="amount"&&<span className="text-blue-500">{sortD==="asc"?"\u2191":"\u2193"}</span>}</th>
+                        <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5">Balance</th>
+                        <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5 w-20"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {withBal.length===0&&<tr><td colSpan={6} className="text-center py-12 text-gray-400 text-sm">No transactions found</td></tr>}
+                      {withBal.map(tx=>
+                        <tr key={tx.id} className="border-b border-gray-50 hover:bg-blue-50/30 transition-colors group">
+                          <td className="px-4 py-2.5 text-sm text-gray-600 whitespace-nowrap">{fmtDate(tx.date)}</td>
+                          <td className="px-4 py-2.5 text-sm font-medium text-gray-900">{tx.description}</td>
+                          <td className="px-4 py-2.5"><CatBadge category={tx.category} /></td>
+                          <td className={"px-4 py-2.5 text-sm font-semibold text-right whitespace-nowrap "+(tx.amount>=0?"text-green-600":"text-red-600")}>{tx.amount>=0?"+":""}{fmtCur(tx.amount)}</td>
+                          <td className="px-4 py-2.5 text-sm text-right text-gray-500 whitespace-nowrap">{fmtCur(tx.balance)}</td>
+                          <td className="px-4 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={()=>setEditing(tx)} className="p-1 rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600"><Ic type="edit" size={14}/></button>
+                              <button onClick={()=>deleteTx(tx.id)} className="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600"><Ic type="trash" size={14}/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {view==="summary" && (
+              <div className="space-y-4 fade-in">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">Spending by Category</h3>
+                  {catBreak.length===0?<p className="text-sm text-gray-400 py-8 text-center">No expenses</p>:
+                    <div className="space-y-3">{catBreak.map(cat=>{
+                      const pct=stats.expenses>0?(cat.total/stats.expenses)*100:0;
+                      return <div key={cat.category}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{backgroundColor:CAT_COLORS[cat.category]}}/><span className="text-sm font-medium text-gray-700">{cat.category}</span><span className="text-xs text-gray-400">({cat.count})</span></div>
+                          <span className="text-sm font-semibold text-gray-900">{fmtCur(cat.total)}</span>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-2"><div className="h-2 rounded-full" style={{width:pct+"%",backgroundColor:CAT_COLORS[cat.category],transition:"width 0.5s"}}/></div>
+                        <div className="text-right text-xs text-gray-400 mt-0.5">{pct.toFixed(1)}%</div>
+                      </div>;
+                    })}</div>
+                  }
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">Top 10 Expenses</h3>
+                  {filtered.filter(t=>t.amount<0).sort((a,b)=>a.amount-b.amount).slice(0,10).map((tx,i)=>
+                    <div key={tx.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                      <div className="flex items-center gap-2"><span className="text-xs text-gray-400 w-5">{i+1}.</span><span className="text-sm text-gray-700">{tx.description}</span><CatBadge category={tx.category}/></div>
+                      <span className="text-sm font-semibold text-red-600">{fmtCur(tx.amount)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {view==="charts" && (
+              <div className="grid md:grid-cols-2 gap-4 fade-in">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">Spending by Category</h3>
+                  <PieChartSVG data={catBreak} />
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">Weekly Spending</h3>
+                  <BarChartSVG data={weeklyData} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

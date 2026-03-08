@@ -365,6 +365,7 @@ function BarChartSVG({ data }) {
 
 function App() {
   const [txs, setTxs] = useState([]);
+  const [monthlyBalances, setMonthlyBalances] = useState({});
   const [loading, setLoading] = useState(true);
   const [selMonth, setSelMonth] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -379,17 +380,17 @@ function App() {
   useEffect(() => {
     fetch('/api/transactions')
       .then(r => r.json())
-      .then(data => { setTxs(data); initialized.current = true; setLoading(false); })
+      .then(data => { setTxs(data.transactions); setMonthlyBalances(data.monthlyBalances || {}); initialized.current = true; setLoading(false); })
       .catch(() => { initialized.current = true; setLoading(false); });
   }, []);
 
   useEffect(() => {
     if (!initialized.current) return;
     const t = setTimeout(() => {
-      fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(txs) });
+      fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactions: txs, monthlyBalances }) });
     }, 500);
     return () => clearTimeout(t);
-  }, [txs]);
+  }, [txs, monthlyBalances]);
 
   const months = useMemo(() => Array.from(new Set(txs.map(t=>monthKey(t.date)))).sort().reverse(), [txs]);
 
@@ -410,17 +411,26 @@ function App() {
   }, [txs, selMonth, filterCat, sortF, sortD, search]);
 
   const withBal = useMemo(() => {
-    const sorted = [...txs].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
-    let bal=0; const m={};
+    if (selMonth === 'all') {
+      const sorted = [...txs].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+      let bal=0; const m={};
+      sorted.forEach(t=>{bal+=t.amount;m[t.id]=bal;});
+      return filtered.map(t=>({...t,balance:m[t.id]}));
+    }
+    const startBal = monthlyBalances[selMonth] || 0;
+    const sorted = [...filtered].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+    let bal = startBal; const m = {};
     sorted.forEach(t=>{bal+=t.amount;m[t.id]=bal;});
     return filtered.map(t=>({...t,balance:m[t.id]}));
-  }, [txs, filtered]);
+  }, [txs, filtered, selMonth, monthlyBalances]);
 
   const stats = useMemo(() => {
     const inc=filtered.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
     const exp=filtered.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
-    return {income:inc,expenses:exp,net:inc-exp,balance:txs.reduce((s,t)=>s+t.amount,0),count:filtered.length};
-  }, [filtered, txs]);
+    const startBal = selMonth !== 'all' ? (monthlyBalances[selMonth] || 0) : null;
+    const balance = startBal !== null ? startBal + inc - exp : txs.reduce((s,t)=>s+t.amount,0);
+    return {income:inc,expenses:exp,net:inc-exp,balance,count:filtered.length};
+  }, [filtered, txs, selMonth, monthlyBalances]);
 
   const catBreak = useMemo(() => {
     const m={};
@@ -490,7 +500,7 @@ function App() {
 
       <div className="max-w-7xl mx-auto px-4 py-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <StatCard iconType="dollar" label="Balance" value={fmtCur(stats.balance)} color="text-blue-600" subtext="Current total" />
+          <StatCard iconType="dollar" label="Balance" value={fmtCur(stats.balance)} color="text-blue-600" subtext={selMonth !== 'all' ? "Month ending" : "Current total"} />
           <StatCard iconType="up" label="Income" value={fmtCur(stats.income)} color="text-green-600" subtext={selMonth==="all"?"All time":monthLabel(selMonth)} />
           <StatCard iconType="down" label="Expenses" value={fmtCur(stats.expenses)} color="text-red-600" subtext={stats.count+" transactions"} />
           <StatCard iconType="chart" label="Net" value={fmtCur(stats.net)} color={stats.net>=0?"text-green-600":"text-red-600"} subtext={stats.net>=0?"Surplus":"Deficit"} />
@@ -511,6 +521,16 @@ function App() {
                   <option value="all">All Months</option>
                   {months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
                 </select>
+                {selMonth !== 'all' && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg bg-white">
+                    <span className="text-xs text-gray-500 whitespace-nowrap">Beg. Balance</span>
+                    <input type="number" step="0.01"
+                      value={monthlyBalances[selMonth] ?? ''}
+                      onChange={e => setMonthlyBalances(prev => ({...prev, [selMonth]: parseFloat(e.target.value) || 0}))}
+                      className="text-sm outline-none w-24 text-right font-medium text-blue-600"
+                      placeholder="0.00" />
+                  </div>
+                )}
                 <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white outline-none">
                   <option value="all">All Categories</option>
                   {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}

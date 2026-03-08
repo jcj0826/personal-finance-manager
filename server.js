@@ -18,7 +18,7 @@ app.get('/api/transactions', (req, res) => {
     if (!fs.existsSync(DATA_FILE)) return res.json({ transactions: [], monthlyBalances: {} });
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     // backward compat: old format was a plain array
-    if (Array.isArray(data)) return res.json({ transactions: data, monthlyBalances: {} });
+    if (Array.isArray(data)) return res.json({ transactions: data, startingBalance: 0 });
     res.json(data);
   } catch {
     res.status(500).json({ error: 'Failed to read data' });

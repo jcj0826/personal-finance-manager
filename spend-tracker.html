@@ -365,7 +365,7 @@ function BarChartSVG({ data }) {
 
 function App() {
   const [txs, setTxs] = useState([]);
-  const [monthlyBalances, setMonthlyBalances] = useState({});
+  const [startingBalance, setStartingBalance] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selMonth, setSelMonth] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
@@ -380,17 +380,17 @@ function App() {
   useEffect(() => {
     fetch('/api/transactions')
       .then(r => r.json())
-      .then(data => { setTxs(data.transactions); setMonthlyBalances(data.monthlyBalances || {}); initialized.current = true; setLoading(false); })
+      .then(data => { setTxs(data.transactions); setStartingBalance(data.startingBalance || 0); initialized.current = true; setLoading(false); })
       .catch(() => { initialized.current = true; setLoading(false); });
   }, []);
 
   useEffect(() => {
     if (!initialized.current) return;
     const t = setTimeout(() => {
-      fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactions: txs, monthlyBalances }) });
+      fetch('/api/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactions: txs, startingBalance }) });
     }, 500);
     return () => clearTimeout(t);
-  }, [txs, monthlyBalances]);
+  }, [txs, startingBalance]);
 
   const months = useMemo(() => Array.from(new Set(txs.map(t=>monthKey(t.date)))).sort().reverse(), [txs]);
 
@@ -410,27 +410,34 @@ function App() {
     return r;
   }, [txs, selMonth, filterCat, sortF, sortD, search]);
 
+  // Balance at the start of the selected month (or startingBalance for all-months view)
+  const monthBeginBal = useMemo(() => {
+    if (selMonth === 'all') return startingBalance;
+    const prior = txs.filter(t => monthKey(t.date) < selMonth);
+    return startingBalance + prior.reduce((s,t) => s+t.amount, 0);
+  }, [txs, selMonth, startingBalance]);
+
   const withBal = useMemo(() => {
     if (selMonth === 'all') {
       const sorted = [...txs].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
-      let bal=0; const m={};
+      let bal = startingBalance; const m={};
       sorted.forEach(t=>{bal+=t.amount;m[t.id]=bal;});
       return filtered.map(t=>({...t,balance:m[t.id]}));
     }
-    const startBal = monthlyBalances[selMonth] || 0;
     const sorted = [...filtered].sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
-    let bal = startBal; const m = {};
+    let bal = monthBeginBal; const m = {};
     sorted.forEach(t=>{bal+=t.amount;m[t.id]=bal;});
     return filtered.map(t=>({...t,balance:m[t.id]}));
-  }, [txs, filtered, selMonth, monthlyBalances]);
+  }, [txs, filtered, selMonth, startingBalance, monthBeginBal]);
 
   const stats = useMemo(() => {
     const inc=filtered.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
     const exp=filtered.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
-    const startBal = selMonth !== 'all' ? (monthlyBalances[selMonth] || 0) : null;
-    const balance = startBal !== null ? startBal + inc - exp : txs.reduce((s,t)=>s+t.amount,0);
+    const balance = selMonth === 'all'
+      ? startingBalance + txs.reduce((s,t)=>s+t.amount,0)
+      : monthBeginBal + inc - exp;
     return {income:inc,expenses:exp,net:inc-exp,balance,count:filtered.length};
-  }, [filtered, txs, selMonth, monthlyBalances]);
+  }, [filtered, txs, selMonth, startingBalance, monthBeginBal]);
 
   const catBreak = useMemo(() => {
     const m={};
@@ -511,6 +518,13 @@ function App() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 sticky top-20">
               <h2 className="text-sm font-semibold text-gray-900 mb-3">{editing ? "Edit Transaction" : "New Transaction"}</h2>
               <TransactionForm onAdd={addTx} editingTx={editing} onUpdate={updateTx} onCancelEdit={()=>setEditing(null)} />
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Starting Balance</label>
+                <input type="number" step="0.01" value={startingBalance}
+                  onChange={e => setStartingBalance(parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none text-right font-medium" />
+                <p className="text-xs text-gray-400 mt-1">Balance before your first transaction</p>
+              </div>
             </div>
           </div>
 
@@ -521,16 +535,6 @@ function App() {
                   <option value="all">All Months</option>
                   {months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
                 </select>
-                {selMonth !== 'all' && (
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg bg-white">
-                    <span className="text-xs text-gray-500 whitespace-nowrap">Beg. Balance</span>
-                    <input type="number" step="0.01"
-                      value={monthlyBalances[selMonth] ?? ''}
-                      onChange={e => setMonthlyBalances(prev => ({...prev, [selMonth]: parseFloat(e.target.value) || 0}))}
-                      className="text-sm outline-none w-24 text-right font-medium text-blue-600"
-                      placeholder="0.00" />
-                  </div>
-                )}
                 <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white outline-none">
                   <option value="all">All Categories</option>
                   {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}

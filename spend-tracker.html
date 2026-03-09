@@ -88,7 +88,7 @@ function parseCSVLine(line) {
 function ImportModal({ onClose, onImport }) {
   const [headers, setHeaders] = useState([]);
   const [rows, setRows] = useState([]);
-  const [colMap, setColMap] = useState({ date: '', amount: '', description: '', category: '' });
+  const [colMap, setColMap] = useState({ entryDate: '', postedDate: '', amount: '', description: '', category: '' });
   const [negate, setNegate] = useState(false);
   const [skipDupes, setSkipDupes] = useState(true);
   const [step, setStep] = useState('upload');
@@ -111,7 +111,8 @@ function ImportModal({ onClose, onImport }) {
         return h || '';
       };
       setColMap({
-        date: find('date'),
+        entryDate: find('entry date', 'transaction date', 'date'),
+        postedDate: find('posted date', 'post date', 'cleared date', 'clear date', 'posted'),
         amount: find('amount', 'debit', 'credit'),
         description: find('description', 'memo', 'payee', 'merchant', 'name'),
         category: find('category', 'type'),
@@ -122,7 +123,8 @@ function ImportModal({ onClose, onImport }) {
   };
 
   const handleImport = () => {
-    const di = headers.indexOf(colMap.date);
+    const edi = headers.indexOf(colMap.entryDate);
+    const pdi = colMap.postedDate ? headers.indexOf(colMap.postedDate) : -1;
     const ai = headers.indexOf(colMap.amount);
     const dsi = headers.indexOf(colMap.description);
     const ci = colMap.category ? headers.indexOf(colMap.category) : -1;
@@ -132,14 +134,14 @@ function ImportModal({ onClose, onImport }) {
       const amt = isNaN(rawAmt) ? 0 : (negate ? -rawAmt : rawAmt);
       const rawCat = ci >= 0 ? (row[ci] || '').trim() : '';
       const cat = CATEGORIES.includes(rawCat) ? rawCat : 'Other';
-      return { id: genId(), date: parseDate(row[di] || ''), amount: amt, description: (row[dsi] || '').trim(), category: cat };
+      return { id: genId(), date: parseDate(row[edi] || ''), postedDate: pdi >= 0 ? parseDate(row[pdi] || '') : '', amount: amt, description: (row[dsi] || '').trim(), category: cat };
     }).filter(t => t.date && t.amount !== 0 && t.description);
 
     onImport(parsed, skipDupes);
     onClose();
   };
 
-  const canImport = colMap.date && colMap.amount && colMap.description;
+  const canImport = colMap.entryDate && colMap.amount && colMap.description;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={e => e.target===e.currentTarget&&onClose()}>
@@ -166,7 +168,7 @@ function ImportModal({ onClose, onImport }) {
             <p className="text-xs text-gray-500">{rows.length} rows detected. Map your columns to the required fields:</p>
 
             <div className="grid grid-cols-2 gap-3">
-              {[['date','Date *'],['amount','Amount *'],['description','Description *'],['category','Category (optional)']].map(([field, label]) => (
+              {[['entryDate','Entry Date *'],['postedDate','Posted Date (optional)'],['amount','Amount *'],['description','Description *'],['category','Category (optional)']].map(([field, label]) => (
                 <div key={field}>
                   <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
                   <select value={colMap[field]} onChange={e => setColMap(m => ({...m, [field]: e.target.value}))}
@@ -223,6 +225,7 @@ function ImportModal({ onClose, onImport }) {
 
 function TransactionForm({ onAdd, editingTx, onUpdate, onCancelEdit }) {
   const [date, setDate] = useState("");
+  const [postedDate, setPostedDate] = useState("");
   const [amount, setAmount] = useState("");
   const [desc, setDesc] = useState("");
   const [cat, setCat] = useState("Other");
@@ -231,6 +234,7 @@ function TransactionForm({ onAdd, editingTx, onUpdate, onCancelEdit }) {
   useEffect(() => {
     if (editingTx) {
       setDate(editingTx.date);
+      setPostedDate(editingTx.postedDate || "");
       setAmount(Math.abs(editingTx.amount).toString());
       setDesc(editingTx.description);
       setCat(editingTx.category);
@@ -238,14 +242,14 @@ function TransactionForm({ onAdd, editingTx, onUpdate, onCancelEdit }) {
     }
   }, [editingTx]);
 
-  const reset = () => { setDate(""); setAmount(""); setDesc(""); setCat("Other"); setIsExp(true); };
+  const reset = () => { setDate(""); setPostedDate(""); setAmount(""); setDesc(""); setCat("Other"); setIsExp(true); };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!date || !amount || !desc) return;
     const val = isExp ? -Math.abs(parseFloat(amount)) : Math.abs(parseFloat(amount));
-    if (editingTx) { onUpdate({...editingTx, date, amount:val, description:desc, category:cat}); }
-    else { onAdd({id:genId(), date, amount:val, description:desc, category:cat}); }
+    if (editingTx) { onUpdate({...editingTx, date, postedDate, amount:val, description:desc, category:cat}); }
+    else { onAdd({id:genId(), date, postedDate, amount:val, description:desc, category:cat}); }
     reset();
   };
 
@@ -263,15 +267,20 @@ function TransactionForm({ onAdd, editingTx, onUpdate, onCancelEdit }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Entry Date</label>
           <input type="date" value={date} onChange={e => setDate(e.target.value)}
             className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
-          <input type="number" step="0.01" min="0" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
+          <label className="block text-xs font-medium text-gray-500 mb-1">Posted Date <span className="font-normal text-gray-300">(optional)</span></label>
+          <input type="date" value={postedDate} onChange={e => setPostedDate(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
         </div>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">Amount</label>
+        <input type="number" step="0.01" min="0" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required />
       </div>
       <div>
         <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
@@ -473,7 +482,7 @@ function App() {
   }, []);
 
   const exportCSV = () => {
-    const csv=["Date,Amount,Description,Category",...txs.map(t=>t.date+","+t.amount+",\""+t.description+"\","+t.category)].join("\n");
+    const csv=["Entry Date,Posted Date,Amount,Description,Category",...txs.map(t=>[t.date,t.postedDate||'',t.amount,'"'+t.description+'"',t.category].join(','))].join("\n");
     const b=new Blob([csv],{type:"text/csv"});
     const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download="transactions.csv";a.click();URL.revokeObjectURL(u);
   };
@@ -555,21 +564,23 @@ function App() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-100 bg-gray-50">
-                        {[["date","Date"],["description","Description"],["category","Category"]].map(([f,l])=>
+                        {[["date","Entry Date"],["description","Description"],["category","Category"]].map(([f,l])=>
                           <th key={f} className="text-left text-xs font-medium text-gray-500 px-4 py-2.5 cursor-pointer hover:text-gray-700" onClick={()=>toggleSort(f)}>{l} {sortF===f&&<span className="text-blue-500">{sortD==="asc"?"\u2191":"\u2193"}</span>}</th>
                         )}
+                        <th className="text-left text-xs font-medium text-gray-500 px-4 py-2.5">Posted Date</th>
                         <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5 cursor-pointer hover:text-gray-700" onClick={()=>toggleSort("amount")}>Amount {sortF==="amount"&&<span className="text-blue-500">{sortD==="asc"?"\u2191":"\u2193"}</span>}</th>
                         <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5">Balance</th>
                         <th className="text-right text-xs font-medium text-gray-500 px-4 py-2.5 w-20"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {withBal.length===0&&<tr><td colSpan={6} className="text-center py-12 text-gray-400 text-sm">No transactions found</td></tr>}
+                      {withBal.length===0&&<tr><td colSpan={7} className="text-center py-12 text-gray-400 text-sm">No transactions found</td></tr>}
                       {withBal.map(tx=>
                         <tr key={tx.id} className="border-b border-gray-50 hover:bg-blue-50/30 transition-colors group">
                           <td className="px-4 py-2.5 text-sm text-gray-600 whitespace-nowrap">{fmtDate(tx.date)}</td>
                           <td className="px-4 py-2.5 text-sm font-medium text-gray-900">{tx.description}</td>
                           <td className="px-4 py-2.5"><CatBadge category={tx.category} /></td>
+                          <td className="px-4 py-2.5 text-sm text-gray-400 whitespace-nowrap">{tx.postedDate ? fmtDate(tx.postedDate) : <span className="text-gray-200">—</span>}</td>
                           <td className={"px-4 py-2.5 text-sm font-semibold text-right whitespace-nowrap "+(tx.amount>=0?"text-green-600":"text-red-600")}>{tx.amount>=0?"+":""}{fmtCur(tx.amount)}</td>
                           <td className="px-4 py-2.5 text-sm text-right text-gray-500 whitespace-nowrap">{fmtCur(tx.balance)}</td>
                           <td className="px-4 py-2.5 text-right">
